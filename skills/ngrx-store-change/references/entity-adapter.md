@@ -70,7 +70,7 @@ Every helper takes the update plus state and returns new state. They never mutat
 
 Two traps:
 
-- `updateOne(order, state)` does not compile in the way people expect — it wants `{ id: order.id, changes: { status: 'shipped' } }`. Passing the entity silently patches nothing useful.
+- `updateOne` takes an `Update<T>`, not an entity: `updateOne({ id: order.id, changes: { status: 'shipped' } }, state)`. Passing the entity is a compile error, because `changes` is missing — so this one fails loudly. Reach for `setOne` or `upsertOne` when you do have a whole entity in hand.
 - Changing an entity's id via `changes` moves the key. That is legal and occasionally what you want after a server assigns a real id to an optimistically created row, but it will not preserve position unless a `sortComparer` re-sorts.
 
 ```ts
@@ -168,6 +168,19 @@ export interface OrdersState extends EntityState<Order> {
 
 Then `selectIsPending` becomes a selector over `pendingIds`, and a list row asks for its own id.
 
+### Server-side pagination
+
+`selectTotal` counts the entities you are holding, which for a paginated collection is one page. The real total comes from the response, so store it — it is an input, not derived state — and keep it separate from the adapter's own count:
+
+```ts
+export interface OrdersState extends EntityState<Order> {
+  totalCount: number;
+  page: number;
+}
+```
+
+Use `setAll` when a page replaces the list and `upsertMany` when pages accumulate, and never expose `selectTotal` as the collection's size to a paginator that needs `totalCount`.
+
 ### Nested data
 
 If the response embeds children (`order.lineItems[]`) and those children are addressed or edited independently, give them their own adapter in their own slice and keep ids on the parent. Duplicating a child inside two parents means two places to update. If the children are only ever rendered with their parent and never edited alone, leave them embedded — normalising everything is its own anti-pattern.
@@ -193,4 +206,4 @@ it('replaces the collection on load success', () => {
 });
 ```
 
-Do not reach for `.projector()` on the generated collection selectors: `selectAll` is composed from `selectIds` and `selectEntities`, so its projector takes those two arrays, not the state slice.
+Note which form of `getSelectors` you are testing against. Called with no argument it returns plain functions of an `EntityState`, so `selectIds` and `selectEntities` have no `.projector` at all — call them directly on the reducer's output, as above. Called with a state selector, `getSelectors(selectOrdersState)` returns memoized selectors built as `createSelector(selectOrdersState, ...)`, so `selectAllOrders.projector(ordersState)` takes the slice. Either way you pass state, never `(ids, entities)`.
