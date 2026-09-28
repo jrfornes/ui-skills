@@ -1,6 +1,8 @@
 # Testing seams for NgRx
 
-Each layer has a seam that needs no rendered component. Use it. Examples below use Jasmine spies because that is the Angular default; translate to `jest.fn()` / `vi.fn()` if the workspace uses Jest or Vitest — check with `rg -n '"test":' package.json` and look at a neighbouring spec first.
+Each layer has a seam that needs no rendered component. Use it.
+
+Find the runner before writing a spec, and match it. In an Nx workspace the runner is per project, not a root `package.json` script: check the project's `test` target and look at a neighbouring spec. Recent Nx generators default Angular libraries to Vitest, while older projects in the same repo are usually on Jest, so one workspace can legitimately have both. Examples below use `jest.fn()`; `vi.fn()` is a drop-in, and on Jasmine the equivalents are `jasmine.createSpyObj` and `spy.and.returnValue`.
 
 Cover, for every store change:
 
@@ -16,7 +18,7 @@ A reducer is a pure function, so there is no TestBed, no async, and no mocking. 
 ```ts
 import { ordersFeature } from './orders.reducer';
 
-const initialState = ordersFeature.reducer(undefined, { type: '@@init' } as Action);
+const initialState = ordersFeature.reducer(undefined, { type: '@@init' });
 ```
 
 ```ts
@@ -101,10 +103,10 @@ The seam is `provideMockActions`: you push actions in and assert on the actions 
 describe('OrdersEffects', () => {
   let actions$: Observable<Action>;
   let effects: OrdersEffects;
-  let api: jasmine.SpyObj<OrdersApi>;
+  let api: { getOrders: jest.Mock };
 
   beforeEach(() => {
-    api = jasmine.createSpyObj<OrdersApi>('OrdersApi', ['getOrders']);
+    api = { getOrders: jest.fn() };
 
     TestBed.configureTestingModule({
       providers: [
@@ -118,7 +120,7 @@ describe('OrdersEffects', () => {
   });
 
   it('emits success with the loaded orders', (done) => {
-    api.getOrders.and.returnValue(of([orderA]));
+    api.getOrders.mockReturnValue(of([orderA]));
     actions$ = of(OrdersPageActions.opened());
 
     effects.loadOrders$.subscribe((action) => {
@@ -128,7 +130,7 @@ describe('OrdersEffects', () => {
   });
 
   it('emits failure and keeps handling later actions', () => {
-    api.getOrders.and.returnValue(throwError(() => new Error('boom')));
+    api.getOrders.mockReturnValue(throwError(() => new Error('boom')));
     actions$ = of(OrdersPageActions.opened(), OrdersPageActions.refreshed());
 
     const emitted: Action[] = [];
@@ -139,7 +141,7 @@ describe('OrdersEffects', () => {
 });
 ```
 
-That second test is the one that catches a misplaced `catchError`. With the error handler on the outer stream the effect completes after the first failure and only one action is emitted, so a test that checks a single emission passes against the broken code.
+That second test is the one that catches a misplaced `catchError`. Subscribing to the effect directly bypasses `defaultEffectsErrorHandler`, so the broken version emits its single failure action and completes, and every later action is ignored — assert on two emissions and it fails. A test that checks one emission passes against both versions. At runtime the error handler would resubscribe and hide this, which is why the seam is worth testing here rather than through the store.
 
 ### Functional effects
 
@@ -174,7 +176,7 @@ it('cancels an in-flight search when a newer term arrives', () => {
     });
 
     // Each request answers 3 frames after it is subscribed, then completes.
-    api.search.and.returnValue(cold('---r|', { r: [orderA] }));
+    api.search.mockReturnValue(cold('---r|', { r: [orderA] }));
 
     const effect$ = TestBed.runInInjectionContext(() => searchOrders());
 
@@ -194,7 +196,7 @@ For `{ dispatch: false }` effects, assert on the collaborator and subscribe expl
 
 ```ts
 it('navigates to the new order', () => {
-  const router = jasmine.createSpyObj<Router>('Router', ['navigate']);
+  const router = { navigate: jest.fn() };
   // ...provide router, then:
   actions$ = of(OrdersApiActions.orderCreatedSuccess({ id: '42' }));
 
@@ -225,7 +227,7 @@ describe('OrdersPage', () => {
   });
 
   it('dispatches opened on init', () => {
-    const dispatch = spyOn(store, 'dispatch');
+    const dispatch = jest.spyOn(store, 'dispatch');
     TestBed.createComponent(OrdersPage).detectChanges();
 
     expect(dispatch).toHaveBeenCalledWith(OrdersPageActions.opened());
@@ -248,6 +250,23 @@ Two things to know about `MockStore`:
 `store.scannedActions$` is an alternative to spying on `dispatch` when you want to assert on a sequence.
 
 The same approach tests a facade: provide `provideMockStore`, override the selectors it exposes, and assert that each intent method dispatches the right action. A facade test that has to reach into `Store` to set something up is telling you the facade is doing too little.
+
+### Stories
+
+If the workspace has Storybook, a container component that injects `Store` will not render in a story without providers, and the fix is the same `provideMockStore`:
+
+```ts
+const meta: Meta<OrdersPage> = {
+  component: OrdersPage,
+  decorators: [
+    applicationConfig({
+      providers: [provideMockStore({ selectors: [{ selector: ordersFeature.selectVisibleOrders, value: [orderA] }] })],
+    }),
+  ],
+};
+```
+
+This is also a design signal: if a presentational component needs store providers to render a story, it is a container, and the state should be moving up to `input()` instead.
 
 ## Flow tests with the real store
 
