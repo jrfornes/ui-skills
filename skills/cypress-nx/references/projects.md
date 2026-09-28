@@ -139,9 +139,9 @@ Older workspaces instead have an explicit target:
 }
 ```
 
-Here `--watch` switches the executor to `cypress open`, and there is no `e2e-ci`. `nx g @nx/cypress:convert-to-inferred` migrates a project to the plugin; only run it if the user asked for that migration.
+Here `--watch` opens the interactive GUI instead of running headlessly, and there is no `e2e-ci`. Other executor-only options worth knowing: `--skipServe` runs against an already-serving app, `--port` overrides the port passed to the `devServerTarget` (`cypress-auto` picks a free one), and `--headed` shows the browser. `nx g @nx/cypress:convert-to-inferred` migrates a project to the plugin; only run it if the user asked for that migration.
 
-Either way, extra flags are forwarded to Cypress, so `nx run shop-e2e:e2e --spec=src/e2e/orders.cy.ts` works in both.
+Either way `--spec` works, so `nx run shop-e2e:e2e --spec=src/e2e/orders.cy.ts` narrows the run in both. On the executor it is a comma-delimited glob string; on an inferred target it is passed straight through to `cypress run`.
 
 ## The affected graph edge
 
