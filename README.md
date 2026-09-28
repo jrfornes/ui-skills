@@ -5,6 +5,7 @@ Agent skills for UI work. Each skill is a folder under `skills/` containing a `S
 | Skill | Use it for |
 | --- | --- |
 | [`nx-angular-feature`](skills/nx-angular-feature/SKILL.md) | Building Angular features in an Nx monorepo as a vertical slice across feature, ui, data-access, and util libs, with lazy routing, tight public APIs, and module boundaries that still pass |
+| [`cypress-nx`](skills/cypress-nx/SKILL.md) | Adding or fixing Cypress e2e coverage in an Nx monorepo so specs land in the e2e project that owns the app, reuse existing page objects and commands, use stable selectors, and actually run under `nx affected -t e2e` |
 
 ## Installing
 
