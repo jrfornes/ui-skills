@@ -27,29 +27,38 @@ NgRx has several generations of API and most codebases mix them. Match what is a
 | Look at | To learn |
 | --- | --- |
 | `package.json`, the `@ngrx/*` versions | Which APIs you may use (see the version table below) |
+| Whether `@ngrx/operators` is a dependency | Whether `concatLatestFrom`, `mapResponse`, and `tapResponse` are importable at all. They are not bundled with `@ngrx/effects` from v18 on |
+| Whether `@ngrx/schematics` is a dependency | Whether generators exist for the files you are about to write (see step 3) |
+| Whether `@ngrx/eslint-plugin` is in the ESLint config | Which of this skill's rules the lint run already enforces (see step 8) |
 | An existing state folder, e.g. `libs/*/data-access/src/lib/+state/` | File naming, whether selectors are separate from the reducer, whether `createFeature` is used |
-| `provideStore(...)` / `StoreModule.forRoot(...)` | Standalone vs NgModule registration, and which `runtimeChecks` are on |
+| `provideStore(...)` / `StoreModule.forRoot(...)` | Standalone vs NgModule registration, and which `runtimeChecks` were changed from their defaults |
 | `provideState` / `StoreModule.forFeature` call sites | Whether feature state is registered globally, at a route, or lazily |
 | Any `*.facade.ts` | Whether the layer exists at all, and what it exposes |
 | `createEntityAdapter` usage | The collection state shape to copy |
-| `@ngrx/signals` in `package.json` | Whether new state is expected to be a SignalStore instead |
+| `@ngrx/signals` or `@ngrx/component-store` in `package.json` | Which local-state option this workspace actually has, for the check below |
+| The unit test runner of the project you are touching | Whether specs use Jest, Vitest, or Jasmine. In an Nx workspace this is per project, not a root `package.json` script |
 
 ```bash
-rg -n '"@ngrx/' package.json
+rg -n '"@ngrx/|"@nx/(jest|vitest)"' package.json
+rg -n '@ngrx' eslint.config.* .eslintrc.json 2>/dev/null
 rg -l 'createFeature|createActionGroup|createEntityAdapter|createEffect' --glob '*.ts'
 rg -n 'provideStore|StoreModule.forRoot|runtimeChecks' --glob '*.ts'
 rg -l 'Facade' --glob '*.ts'
+npx nx show project <project> --json | rg -n '"test"' -A 5   # which runner this project uses
 ```
 
 | API | Available from |
 | --- | --- |
 | `createActionGroup`, `emptyProps` | `@ngrx/store` 14.3 |
-| `createFeature` with `extraSelectors` | `@ngrx/store` 15 |
+| `createFeature` | `@ngrx/store` 12.4, `extraSelectors` from 15 |
 | `createEffect(..., { functional: true })` | `@ngrx/effects` 15 |
 | `store.selectSignal` | `@ngrx/store` 16 |
-| `concatLatestFrom`, `mapResponse`, `tapResponse` from `@ngrx/operators` | 17.2 (previously `concatLatestFrom` came from `@ngrx/effects`) |
+| `concatLatestFrom` | `@ngrx/effects` up to 17.2, then `@ngrx/operators`. Removed from `@ngrx/effects` in 18 |
+| `mapResponse`, `tapResponse` | `@ngrx/operators` 17.2. `tapResponse` came from `@ngrx/component-store`, which stopped re-exporting it |
 
-**Check first that this belongs in the global store at all.** If exactly one component tree reads the state, nothing else observes it, and it dies with the route, a signal or a component-provided `signalStore` is the better home. The global store earns its cost when state is shared across features, survives navigation, or needs to be inspected in DevTools.
+Never write `concatLatestFrom` or `mapResponse` without confirming their source is installed; adding a dependency is the user's decision, and step 4 has fallbacks that always work.
+
+**Check first that this belongs in the global store at all.** If exactly one component tree reads the state, nothing else observes it, and it dies with the route, the better home is a plain signal or a component-provided store — `signalStore` from `@ngrx/signals`, or `ComponentStore` with `provideComponentStore`, whichever the workspace has. The global store earns its cost when state is shared across features, survives navigation, or needs DevTools. This skill covers the global store only: if the answer is a SignalStore, say so and stop.
 
 ## 2. Classify each trigger, then write down the actions it implies
 
@@ -78,7 +87,32 @@ Two checks that catch most half-done work:
 
 For a cross-feature trigger, prefer listening to the action that already exists (`routerNavigatedAction`, `AuthApiActions.loggedOut`) over asking the other feature to dispatch something new for you.
 
+### Changing state that already exists
+
+Adding to a slice is safe; changing one is not. An action's payload, a selector's return type, or a feature key can have consumers in libraries you are not looking at, so list them before editing.
+
+```bash
+rg -n 'OrdersApiActions\.|ordersFeature\.select' --glob '*.ts'  # dispatchers, ofType listeners, selector consumers
+rg -n "'orders'" --glob '*.ts'                                  # the feature key, before renaming it
+```
+
+Then per consumer, either update it in the same change or keep the old action and selector alongside the new one. Renaming a feature key also breaks anything that persisted or rehydrated that slice, so check `metaReducers` first.
+
 ## 3. Actions: one group per source, request / success / failure
+
+If `@ngrx/schematics` is installed, generate the file set rather than inventing file names. It is the only generator surface — the collections inside `@ngrx/store` and `@ngrx/effects` hold nothing but `ng-add` — and it can scaffold the whole set (`feature`, with `action`, `reducer`, `effect`, `selector`, and `entity` available individually).
+
+```bash
+npx nx g @ngrx/schematics:feature --help                                    # flags for THIS version
+npx nx g @ngrx/schematics:feature orders --project=orders-data-access \
+  --api --group --flat=false --dry-run
+```
+
+The templates are current: they emit `createActionGroup`, `emptyProps`, `props`, and a correctly nested `catchError`. Two things they do not do, and three edits the output needs:
+
+- In a standalone workspace nothing is registered for you — `--module` only wires into an NgModule — so you still add the `provide*` function from step 6 yourself.
+- The generated spec is a `should be created` smoke test. Replace it using step 8.
+- Split the generated success and failure events into their own `[Orders API]` group; narrow the `props<{ error: unknown }>()` failure payload to a serializable message; and choose the effect style and flattening operator per step 4 rather than keeping the class-based `concatMap` default.
 
 One `createActionGroup` per source, named after the event that happened — not after the mutation you want. `setLoading` and `updateOrdersArray` are reducer implementation details leaking into the event name; the next consumer will not fit.
 
@@ -140,19 +174,9 @@ Pick the flattening operator deliberately; the default choice is the bug.
 | `concatMap` | Writes whose order matters against each other | Queues, runs one at a time |
 | `mergeMap` | Independent per-id work, e.g. deleting several rows | Runs in parallel, completion order not guaranteed |
 
-**`catchError` goes inside the inner observable.** Placed on the outer stream it kills the effect: the error completes the `actions$` subscription and the effect silently stops handling every future action.
+**`catchError` goes inside the inner observable**, as in the example above. On the outer stream it never produces the failure action the reducer is waiting for, so the slice sits in `pending` forever behind a spinner that never resolves. What it does *not* do is silently kill the effect: `@ngrx/effects` reports the error through Angular's `ErrorHandler` and resubscribes up to ten times, which is exactly why the bug survives review — the next trigger appears to work, having discarded whatever the stream had accumulated. [references/anti-patterns.md](references/anti-patterns.md) has the wrong/right pair and the test that catches it.
 
-```ts
-// Wrong — this effect works once, then dies forever.
-actions$.pipe(
-  ofType(OrdersPageActions.opened),
-  switchMap(() => api.getOrders()),
-  map((orders) => OrdersApiActions.ordersLoadedSuccess({ orders })),
-  catchError(() => of(OrdersApiActions.ordersLoadedFailure({ message: 'Failed' }))),
-);
-```
-
-If `@ngrx/operators` is available, `mapResponse` makes that mistake harder to write:
+If `@ngrx/operators` is installed, `mapResponse` makes the mistake harder to write, because there is no outer stream to put the handler on:
 
 ```ts
 switchMap(() =>
@@ -168,12 +192,13 @@ switchMap(() =>
 
 Also:
 
-- Need state inside an effect? Use `concatLatestFrom(() => store.select(...))`, which subscribes only when the action arrives. `withLatestFrom` subscribes eagerly and can read state from before the action. Never `take(1)` a selector to grab a snapshot.
+- Need state inside an effect? `concatLatestFrom(() => store.select(...))` subscribes to the selector only once the action arrives. `withLatestFrom` subscribes as soon as the effect does, which throws if the slice's feature is not registered yet; it does **not** read pre-action state, since reducers run before effects either way. Without `@ngrx/operators`, `concatMap((action) => of(action).pipe(withLatestFrom(store.select(...))))` is the same operator by hand. Never `take(1)` a selector to grab a snapshot.
 - **No effect-to-effect chains.** If an action's only purpose is to make a second effect run, and no reducer handles it, the two effects are one effect. Chains are only justified when the intermediate action is itself meaningful state that something reduces or that another feature listens to.
 - Never dispatch an action the same effect listens to — that is an infinite loop.
 - Side-effect-only effects (navigate, toast, analytics, `localStorage`) use `{ dispatch: false }`. Leaving `dispatch` on with a `tap` re-dispatches the source action forever.
 - Return the observable. Never `.subscribe()` inside an effect, and never nest subscribes.
-- Register the effect where its state is registered: `provideEffects(ordersEffects)` next to `provideState(ordersFeature)`, at the route for a lazy feature.
+- Register the effect where its state is registered, at the route for a lazy feature. `provideEffects` takes effect classes or a **record** of functional effects, so functional effects go in as a namespace object: `import * as ordersEffects from './orders.effects'`, then `provideEffects(ordersEffects)`. Passing one functional effect directly does not work. Step 6 wraps both calls in a single exported `provide*` function.
+- Under module federation, register a slice inside the remote that owns it and share `@ngrx/store` as a singleton: unshared, host and remote get separate `Store` instances and dispatches never cross; shared, two remotes claiming one feature key overwrite each other.
 
 ## 5. Reducer: pure, immutable, one status field instead of boolean soup
 
@@ -186,6 +211,13 @@ export interface OrdersState {
   status: 'idle' | 'pending' | 'success' | 'failure';
   error: string | null;
 }
+
+const initialState: OrdersState = {
+  orders: [],
+  statusFilter: null,
+  status: 'idle',
+  error: null,
+};
 
 export const ordersFeature = createFeature({
   name: 'orders',
@@ -212,23 +244,9 @@ export const ordersFeature = createFeature({
 
 - A single `status` union beats separate `loading` / `loaded` / `error` flags, which can represent states that cannot happen and always drift. Follow the repo's existing shape if it already picked one.
 - Spread at every level you change, and use non-mutating array operations: `[...items, item]`, `items.filter(...)`, `items.map(...)`, `[...items].sort(...)`. Never `push`, `splice`, `sort`, or `reverse` on state. For collections, let `@ngrx/entity` do it — see [references/entity-adapter.md](references/entity-adapter.md).
-- **Do not store derived state.** No `filteredOrders`, no `orderCount`, no `selectedOrder` object. Store the inputs (`orders`, `statusFilter`, `selectedId`) and derive the rest in selectors, or the copies will go stale.
-- Turn on the runtime checks so immutability violations fail loudly in development:
-
-```ts
-provideStore(
-  {},
-  {
-    runtimeChecks: {
-      strictStateImmutability: true,
-      strictActionImmutability: true,
-      strictStateSerializability: true,
-      strictActionSerializability: true,
-      strictActionTypeUniqueness: true,
-    },
-  },
-);
-```
+- **Do not store anything you can derive from what you already store.** No `filteredOrders`, no `selectedOrder` object, no count of an array that is in state: those copies go stale. A value the server computed is not derived — a `totalCount` from a paginated response cannot be recovered from the page in hand, so it is an input and it belongs in state.
+- **Decide what resets the slice.** State registered with `provideState` at a lazy route is not torn down when the route is left, so re-entering shows the last visit's data until something overwrites it. Reduce a reset on whichever trigger should clear it — `routerNavigatedAction`, `AuthApiActions.loggedOut`, or the page's own opened action.
+- **Know which runtime checks you already have.** `strictStateImmutability` and `strictActionImmutability` are on by default in development, so a mutating reducer throws a `TypeError` today with no configuration, and every check is off in production builds. Only the two serializability checks and `strictActionTypeUniqueness` need opting into, and they have trade-offs — see [references/anti-patterns.md](references/anti-patterns.md).
 
 ## 6. Selectors: every value a component reads has a named selector
 
@@ -250,13 +268,22 @@ export const ordersFeature = createFeature({
 ```
 
 - Derive in selectors, not components. Sorting, filtering, joining two slices, formatting a count — all selector work, all memoized, all testable without a TestBed.
-- Parameterized reads: prefer putting the parameter in the store (the route param via `@ngrx/router-store`, whose selectors you create with `getRouterSelectors()`) and composing a plain selector. A selector *factory* called from a template or from several components at once destroys memoization, because `createSelector` memoizes only the most recent arguments.
+- Parameterized reads: prefer putting the parameter in the store (the route param via `@ngrx/router-store`, whose selectors you create with `getRouterSelectors()`) and composing a plain selector. A selector *factory* called from a template creates a new selector on every change detection run, so nothing is ever memoized; one shared factory-made selector used with different arguments memoizes only the most recent call and thrashes. The older `props`-based selector form is deprecated in `@ngrx/store` and slated for removal, so do not reach for it either.
 - If a template needs more than about three values, expose one view-model selector and read it once, or use `store.selectSignal`.
-- Export from the feature's public API (`index.ts`): the action groups, the selectors, the state type if consumers genuinely need it, and the `provideState` / `provideEffects` helpers. Do not export the reducer internals, the raw `initialState`, or effect functions.
+- Export from the feature's public API (`index.ts`) the action groups, the selectors, the state type if consumers genuinely need it, and one `provide*` function that registers everything. Keep the reducer, the raw `initialState`, and the effects themselves internal, so the effects record has no consumers outside the library:
+
+```ts
+// libs/orders/data-access/src/index.ts
+export function provideOrdersState(): EnvironmentProviders {
+  return makeEnvironmentProviders([provideState(ordersFeature), provideEffects(ordersEffects)]);
+}
+```
+
+A lazy route then needs only `providers: [provideOrdersState()]`, which is also the `provide*()` surface the `nx-angular-feature` skill expects a data-access library to export.
 
 ## 7. Facade: only if the workspace already uses them
 
-Check step 1. If the codebase has no facades, do not add the first one — inject `Store` in the container component and keep presentational children on `input()` / `output()`. If facades are the convention, the facade must actually hide the store:
+Check step 1. If the codebase has no facades, do not add the first one — inject `Store` in the container component and keep presentational children on `input()` / `output()`. A data-access library's public API is then its action groups, selectors, and `provide*` function rather than a facade class; both are legitimate contracts, and the workspace has already picked one. If facades are the convention, the facade must actually hide the store:
 
 ```ts
 @Injectable()
@@ -268,10 +295,6 @@ export class OrdersFacade {
 
   open(): void {
     this.store.dispatch(OrdersPageActions.opened());
-  }
-
-  filterByStatus(status: OrderStatus | null): void {
-    this.store.dispatch(OrdersPageActions.statusFilterChanged({ status }));
   }
 }
 ```
@@ -289,7 +312,18 @@ Each layer has a cheap seam; use it instead of driving everything through a rend
 | Effect | `provideMockActions` plus a stubbed API. Cover success, failure, and the cancellation the operator promises |
 | Component / facade | `provideMockStore` with `overrideSelector`, assert on dispatched actions. Use the real store when the test is about a flow |
 
-Then read the diff against [references/anti-patterns.md](references/anti-patterns.md) and confirm the public surface is consistent: the actions, selectors, and facade methods a consumer sees should describe the feature, with no store internals among them.
+Write the specs in the runner that project already uses, which step 1 established. Do not introduce a second one.
+
+Then run the checks, read the diff against [references/anti-patterns.md](references/anti-patterns.md), and confirm the public surface is consistent: the actions, selectors, and facade methods a consumer sees should describe the feature, with no store internals among them.
+
+```bash
+npx nx affected -t lint test                                  # or: nx run-many -t lint test -p <touched projects>
+npx tsc -p libs/<scope>/data-access/tsconfig.lib.json --noEmit # consumers in other libs are not covered by one project's test run
+rg -n 'store.select\(\(' --glob '*.ts'                         # inline selectors that should be named
+rg -n 'take\(1\)|\.subscribe\(' --glob '*.effects.ts'          # snapshot reads and nested subscribes in effects
+```
+
+How much that lint run proves depends on whether `@ngrx/eslint-plugin` is configured: it enforces about a third of this skill mechanically, and without it the two greps are the only automated coverage. [references/anti-patterns.md](references/anti-patterns.md) maps its rules onto the sections above. Say which case you are in rather than implying lint checked any of this.
 
 ## Definition of done
 
@@ -297,8 +331,11 @@ Then read the diff against [references/anti-patterns.md](references/anti-pattern
 - [ ] Every new action has the effect and reducer case its row in step 2 requires; every reducer case has a selector that exposes what it changed.
 - [ ] Every request action has success and failure counterparts, and failure payloads are serializable.
 - [ ] Each effect does one job, its flattening operator was chosen for its cancellation behaviour, and `catchError` (or `mapResponse`) sits inside the inner observable.
+- [ ] Every operator used is importable in this workspace: nothing from `@ngrx/operators` unless it is a dependency.
 - [ ] No effect chains only to trigger another effect; no effect dispatches an action it listens for; side-effect-only effects are `{ dispatch: false }`.
-- [ ] The reducer is pure and deterministic, updates immutably, stores no derived values, and the store's runtime checks are enabled.
+- [ ] The reducer is pure and deterministic, updates immutably, and stores only inputs — either values the user or the server supplied, not values a selector could compute.
+- [ ] Something resets the slice when it should be empty, or the decision not to reset it was deliberate.
 - [ ] Components read state only through named selectors, and derived values are computed in selectors rather than in components or templates.
 - [ ] A facade was added only because the workspace uses facades, and it exposes no `Store`, `dispatch`, actions, or selectors.
-- [ ] Reducer, selector, and effect tests exist, including the failure path, and the existing suite plus lint still pass.
+- [ ] Existing consumers of any action, selector, or feature key you changed were found and updated.
+- [ ] Reducer, selector, and effect tests exist, including the failure path, written in the runner that project already uses, and `nx affected -t lint test` passes.

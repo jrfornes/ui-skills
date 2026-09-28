@@ -2,14 +2,26 @@
 
 Read the diff against this list before calling the change done. Ordered roughly by how much damage each one does.
 
+Several of them are machine-checkable, so check for `@ngrx/eslint-plugin` before reviewing by hand:
+
+| Rule | Enforced by |
+| --- | --- |
+| Components never subscribe to or derive from the store | `no-store-subscription`, `avoid-mapping-selectors`, `avoid-combining-selectors` |
+| Every read goes through a named selector | `prefer-selector-in-select`, `prefix-selectors-with-select` |
+| Actions are event-named and dispatched as creators | `good-action-hygiene`, `prefer-action-creator-in-dispatch` |
+| No effect dispatches an action it listens for | `avoid-cyclic-effects`, `no-dispatch-in-effects` |
+| `concatLatestFrom` over `withLatestFrom` | `prefer-concat-latest-from` |
+
+`on-function-explicit-return-type` is worth knowing too: an explicit return type on each `on` handler is the alternative to the `as const` the reducer example uses to stop `status` widening to `string`.
+
 | Anti-pattern | Symptom | Fix |
 | --- | --- | --- |
-| `catchError` on the outer effect stream | The effect works once, then stops firing with no error anywhere | Move it inside the flattening projection, or use `mapResponse` |
+| `catchError` on the outer effect stream | A failed request never produces its failure action, so the slice stays `pending` and the spinner never stops | Move it inside the flattening projection, or use `mapResponse` |
 | Logic in the component | Component subscribes, computes, then dispatches based on what it read | Dispatch the event; decide in the effect or reducer; derive in a selector |
 | Effect chained only to trigger another effect | An action with no reducer case and exactly one listener | Collapse into one effect |
 | Store internals in the component | `store.select((s) => s.orders.items)`, or a slice picked apart in the template | Named exported selectors only |
-| Derived state stored in the reducer | `filteredOrders`, `orderCount`, `selectedOrder` in state | Store the inputs, derive with `createSelector` |
-| Mutating state | `state.items.push(...)`, `items.sort()` | Non-mutating operations, entity adapter, runtime checks on |
+| Derived state stored in the reducer | `filteredOrders`, `selectedOrder`, a count of an array already in state | Store the inputs, derive with `createSelector`. A server-computed `totalCount` is an input, not derived |
+| Mutating state | `state.items.push(...)`, `items.sort()` | Non-mutating operations or the entity adapter. Already a `TypeError` in development: `strictStateImmutability` is on by default |
 | One action reused by several sources | DevTools cannot tell you what caused a change | One action group per source; `ofType` both in the effect |
 | Leaky facade | Facade returns `store`, or has `dispatch(action)` | Intent-named methods and exposed state only |
 | Snapshot reads via `take(1)` | Effect or component pulls a value out of a selector imperatively | `concatLatestFrom` in the effect; bind in the template |
@@ -19,10 +31,19 @@ Read the diff against this list before calling the change done. Ordered roughly 
 
 ## `catchError` in the wrong place
 
-This is the single most common NgRx bug, because nothing reports it. When the error reaches the outer stream, the subscription to `actions$` completes and the effect is gone for the rest of the session.
+This is the most common NgRx bug, and the reason it survives review is not that it is invisible — it is that the framework papers over it.
+
+When the error reaches the outer stream, the effect's subscription to `actions$` is torn down. `@ngrx/effects` wraps every effect in `defaultEffectsErrorHandler`, which passes the error to Angular's `ErrorHandler` and then resubscribes the effect, up to ten attempts before it stops trying. So the console does get an error, and the next trigger does work.
+
+What is lost is everything that mattered:
+
+- **The failure action is never dispatched.** The reducer never sees `ordersLoadedFailure`, so `status` stays `'pending'`, `error` stays `null`, and the UI shows a spinner forever. This is the symptom users report.
+- **Stream state is discarded on resubscribe.** Anything the pipeline had accumulated — a `debounceTime` window, a `scan`, an in-flight request — is gone, so a resubscribed search or polling effect silently changes behaviour.
+- **The tenth failure is the last.** After the retry budget is exhausted the effect really is gone for the rest of the session, so a backend having a bad minute can permanently disable a feature.
+- **With `useEffectsErrorHandler: false` there is no budget at all** and the first error is permanent.
 
 ```ts
-// Wrong: dies permanently on the first failed request.
+// Wrong: no failure action, and the pipeline is rebuilt behind your back.
 loadOrders$ = createEffect(() =>
   this.actions$.pipe(
     ofType(OrdersPageActions.opened),
@@ -50,9 +71,9 @@ loadOrders$ = createEffect(() =>
 );
 ```
 
-`mapResponse` from `@ngrx/operators` is the same thing with the shape enforced, and `tapResponse` is its `{ dispatch: false }` sibling.
+`mapResponse` from `@ngrx/operators` is the same thing with the shape enforced, and `tapResponse` is its `{ dispatch: false }` sibling. Both need `@ngrx/operators` as a dependency; they are not part of `@ngrx/effects`, and `@ngrx/component-store` no longer re-exports `tapResponse`.
 
-The test that catches it: dispatch the trigger, fail the API, then dispatch the trigger again and assert two actions came out. A single-emission test passes either way.
+The test that catches it: dispatch the trigger, fail the API, then dispatch the trigger again and assert two actions came out. A single-emission test passes either way. That test subscribes to the effect observable directly, so there is no `defaultEffectsErrorHandler` in the way and the broken version really does emit once and complete — the unit test is stricter than the runtime, which is what you want here.
 
 ## Logic in the component
 
@@ -78,6 +99,7 @@ onRefresh(): void {
 
 ```ts
 // Right — the condition lives in the effect, where state is available lazily.
+// `concatLatestFrom` needs @ngrx/operators; see step 1 of the skill for the plain-RxJS form.
 export const loadOrdersIfEmpty = createEffect(
   (actions$ = inject(Actions), store = inject(Store), api = inject(OrdersApi)) =>
     actions$.pipe(
@@ -136,7 +158,7 @@ export class OrdersPage implements OnInit, OnDestroy {
 }
 ```
 
-Three problems in one: manual subscription management, deriving in TypeScript instead of a memoized selector, and `sort` mutating the array the store handed over — which throws once `strictStateImmutability` is on.
+Three problems in one: manual subscription management, deriving in TypeScript instead of a memoized selector, and `sort` mutating the array the store handed over — which already throws in development, because `strictStateImmutability` defaults to on.
 
 ```ts
 // Right
@@ -171,7 +193,24 @@ export const loadOrders = createAction('[Orders] Load Orders');
 
 Actions are events, and the event "the orders page was opened" is not the event "the refresh button was clicked" even when they currently do the same thing. Keep them separate and let the effect accept both; when one of them later needs different behaviour, nothing has to be untangled.
 
-Related hygiene: turn on `strictActionTypeUniqueness` so two files cannot accidentally define the same type string.
+## Runtime checks
+
+`strictStateImmutability` and `strictActionImmutability` are already on in development, and all checks are disabled in production builds. The three that need opting in are worth it, with one caveat each:
+
+```ts
+provideStore(
+  {},
+  {
+    runtimeChecks: {
+      strictStateSerializability: true,
+      strictActionSerializability: true,
+      strictActionTypeUniqueness: true,
+    },
+  },
+);
+```
+
+The serializability pair bans `Date`, `Map`, `Set`, and class instances from state and action payloads — store timestamps as ISO strings and map DTOs to plain objects at the HTTP boundary. It also cannot be combined with `@ngrx/router-store`'s `FullRouterStateSerializer`, which stores a non-serializable router state; router-store logs a warning telling you so, and the default `MinimalRouterStateSerializer` has no such problem. `strictActionTypeUniqueness` throws at startup on duplicate type strings, which is what you want, but it will surface pre-existing duplicates the first time you enable it in an older codebase.
 
 ## Leaky facades
 
