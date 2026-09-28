@@ -87,11 +87,13 @@ export const getGreeting = () => cy.get('h1');
 
 Follow whichever shape the workspace already uses. Extend `app.po.ts` or add a sibling `orders.po.ts` next to it; do not start a parallel `helpers/` or `pages/` tree.
 
-A new custom command needs two edits, not one. Without the interface entry the spec fails to type-check:
+A new custom command needs two edits, not one. Without the interface entry the spec fails to type-check. Keep the two `eslint-disable` comments Nx generates alongside the declaration — without them `@typescript-eslint/no-namespace` errors and `no-unused-vars` warns on `Subject`:
 
 ```ts
 // apps/shop-e2e/src/support/commands.ts
+// eslint-disable-next-line @typescript-eslint/no-namespace
 declare namespace Cypress {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface Chainable<Subject> {
     seedOrder(order: Partial<Order>): Chainable<string>;
   }
@@ -153,11 +155,15 @@ Log in once per session rather than per test:
 
 ```ts
 beforeEach(() => {
-  cy.session('buyer', () => {
-    cy.request('POST', '/api/test/login', { user: 'buyer' });
+  cy.session('buyer', () => cy.request('POST', '/api/test/login', { user: 'buyer' }), {
+    validate() {
+      cy.request('/api/me').its('status').should('eq', 200);
+    },
   });
 });
 ```
+
+`validate` must be a block body returning nothing. An arrow that implicitly returns the chainable fails to type-check, because Cypress expects `void | Promise<false | void>`. Without `validate` at all, an expired cached session is restored and the next test lands on a login screen.
 
 Give each test its own data (a per-test suffix or generated id) so parallel CI shards do not collide, and clean it up in `afterEach` or by seeding fresh per spec. A spec must pass when run alone and when run twice in a row.
 

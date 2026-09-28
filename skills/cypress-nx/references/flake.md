@@ -46,12 +46,16 @@ cy.get('[data-cy=report-status]', { timeout: 30_000 }).should('contain', 'Ready'
 
 Angular Material and Angular's own animations are the most common source of detached-element and mis-targeted-click failures. Cypress waits for an element to stop moving (`waitForAnimations`, `animationDistanceThreshold`), but a dialog that fades while its content re-renders still slips through.
 
-Best fix: serve the app under test with animations off. Gate it so production is unaffected:
+Best fix: serve the app under test with animations off. Gate it on Cypress so production is unaffected, matching whichever animation provider the app already uses:
 
 ```ts
 // apps/shop/src/app/app.config.ts
+const underTest = 'Cypress' in window;
+
 providers: [
-  ...(window.Cypress ? [provideNoopAnimations()] : [provideAnimationsAsync()]),
+  // whichever the workspace already calls: provideAnimationsAsync, or
+  // provideAnimations / provideNoopAnimations from @angular/platform-browser/animations
+  provideAnimationsAsync(underTest ? 'noop' : 'animations'),
 ]
 ```
 
@@ -90,11 +94,13 @@ Under the Nx atomizer each spec file runs as its own task, possibly on a differe
 ```ts
 const loginAs = (user: string) =>
   cy.session(user, () => cy.request('POST', '/api/test/login', { user }), {
-    validate: () => cy.request('/api/me').its('status').should('eq', 200),
+    validate() {
+      cy.request('/api/me').its('status').should('eq', 200);
+    },
   });
 ```
 
-Without `validate`, an expired cached session gets restored and the next test fails on a login screen.
+Without `validate`, an expired cached session gets restored and the next test fails on a login screen. Write `validate` as a block body: an arrow that implicitly returns the chainable is a type error, since Cypress types the option as returning `void | Promise<false | void>`.
 
 ## Retries
 

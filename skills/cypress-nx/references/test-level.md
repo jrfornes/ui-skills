@@ -71,19 +71,24 @@ Component test specs are also `*.cy.ts`, but they live inside the lib next to th
 
 ```ts
 // libs/orders/ui/src/lib/order-card/order-card.cy.ts
+import { createOutputSpy } from 'cypress/angular';
 import { OrderCard } from './order-card';
 
 describe(OrderCard.name, () => {
   it('emits select with the order id', () => {
-    const onSelect = cy.spy().as('onSelect');
     cy.mount(OrderCard, {
-      componentProperties: { order: { id: 'o-1', total: 42 }, select: { emit: onSelect } as any },
+      componentProperties: {
+        order: { id: 'o-1', total: 42 },
+        select: createOutputSpy('selectSpy'),
+      },
     });
     cy.get('[data-cy=order-card]').click();
-    cy.get('@onSelect').should('have.been.calledWith', 'o-1');
+    cy.get('@selectSpy').should('have.been.calledWith', 'o-1');
   });
 });
 ```
+
+`createOutputSpy` returns an `EventEmitter` with a spied `emit`, aliased under the name you pass. It works for both `@Output()` emitters and signal-based `output()`. `cy.mount(Component, { autoSpyOutputs: true })` spies on every output at once, aliased as `<outputName>Spy`.
 
 If the workspace has no component-testing configuration and does not want one, use Angular's `TestBed` through the existing `nx test <lib>` setup instead. Do not introduce a third testing stack to avoid writing one e2e.
 
