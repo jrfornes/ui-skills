@@ -7,15 +7,7 @@ description: Add or fix Cypress e2e coverage in an Nx monorepo so the spec lands
 
 An e2e spec is only useful if CI runs it. In an Nx workspace that means the spec lives in the e2e project whose graph edge reaches the changed code, runs through an Nx target that owns the server and the base URL, and asserts on what a user sees rather than on how the app is built.
 
-Work through these five steps in order. Step 1 and step 2 are where the damage happens: a spec written at the wrong level or in the wrong project is worse than no spec, because it costs CI time on every run and still misses regressions.
-
-```
-- [ ] 1. Decide whether this belongs in e2e at all
-- [ ] 2. Find the e2e project that owns the change
-- [ ] 3. Read that project's conventions before writing anything
-- [ ] 4. Write the spec: stable selectors, gated waits, API-seeded data
-- [ ] 5. Run it through Nx targets and prove `affected` picks it up
-```
+Work through the steps in order. Steps 1 and 2 are where the damage happens: a spec written at the wrong level or in the wrong project is worse than no spec, because it costs CI time on every run and still misses regressions.
 
 ## 1. Decide whether this belongs in e2e at all
 
@@ -37,7 +29,7 @@ Rules of thumb:
 - If the assertion can be written without a server, it does not need e2e.
 - This is not licence to delete e2e coverage of a money path. Checkout, login, and publish flows earn their spec.
 
-[references/test-level.md](references/test-level.md) has the full decision table, how Cypress component testing is wired in Nx, and worked examples of moving an assertion down a level.
+[references/test-level.md](references/test-level.md) has the cost of each level, worked examples of moving an assertion down a level, and how Cypress component testing is wired in Nx.
 
 ## 2. Find the e2e project that owns the change
 
@@ -78,14 +70,7 @@ The workspace's existing helpers beat anything you would invent. Read these firs
 | any existing `src/e2e/*.cy.ts` | selector convention, setup style, assertion style |
 | `apps/<app>-e2e/tsconfig.json` `include` | whether a new folder will even be compiled |
 
-Nx generates a function-per-query page object rather than a class:
-
-```ts
-// apps/shop-e2e/src/support/app.po.ts
-export const getGreeting = () => cy.get('h1');
-```
-
-Follow whichever shape the workspace already uses. Extend `app.po.ts` or add a sibling `orders.po.ts` next to it; do not start a parallel `helpers/` or `pages/` tree.
+Nx generates a function-per-query page object (`export const getGreeting = () => cy.get('h1')`) rather than a class. Follow whichever shape the workspace already uses. Extend `app.po.ts` or add a sibling `orders.po.ts` next to it; do not start a parallel `helpers/` or `pages/` tree.
 
 A new custom command needs two edits, not one. Without the interface entry the spec fails to type-check. Keep the two `eslint-disable` comments Nx generates alongside the declaration — without them `@typescript-eslint/no-namespace` errors and `no-unused-vars` warns on `Subject`:
 
@@ -177,11 +162,7 @@ nx open-cypress <app>-e2e                             # interactive, when the pl
 nx affected -t e2e --base=origin/main                 # what CI will actually run
 ```
 
-Confirm the target names first — they are configurable, and older workspaces use the `@nx/cypress:cypress` executor instead of inferred targets:
-
-```bash
-nx show project <app>-e2e --json    # look for e2e, e2e-ci, open-cypress, or an executor block
-```
+Confirm the target names in the `nx show project <app>-e2e --json` output from step 2 first — they are configurable, and older workspaces use the `@nx/cypress:cypress` executor instead of inferred targets.
 
 Do not invent Cypress invocations around the target:
 
@@ -197,7 +178,7 @@ Do not invent Cypress invocations around the target:
 Two traps worth knowing before you trust a green run:
 
 - The e2e target is cached. A repeat run can replay a cached pass without launching a browser. When you are chasing flake or verifying a fix, add `--skip-nx-cache`.
-- The Nx Cypress preset reuses a server that is already answering on the base URL. A stale `nx serve` left running from an earlier branch will silently serve old code and your spec will test it. Stop stray dev servers before trusting a result; the log line to look for is `Reusing the server already running on ...`.
+- The Nx Cypress preset reuses a server that is already answering on the base URL. A stale `nx serve` left running from an earlier branch will silently serve old code and your spec will test it. Stop stray dev servers before trusting a result; the log line to look for is `Reusing the server already running on ...`. Setting `webServerConfig: { reuseExistingServer: false }` in the preset options turns this into an error.
 
 ### Prove `affected` includes the project
 
@@ -215,10 +196,8 @@ Also check which target CI runs. Workspaces using the Nx atomizer run `nx affect
 ## Definition of done
 
 - [ ] The new user path is covered by one spec in the e2e project that owns the app, inside the configured `specPattern`.
-- [ ] The spec reuses existing page objects, custom commands, and fixtures. Anything new was added to the existing support files, and new commands were added to the `Chainable` interface too.
-- [ ] Every selector is a stable test attribute or an accessible name. No CSS classes, framework internals, or positional selectors.
-- [ ] No `cy.wait(<number>)`. Every wait is an intercept alias or a retried assertion.
-- [ ] Data is seeded and torn down through intercepts, the API, or a task; the spec passes run alone and run twice in a row.
+- [ ] The spec reuses existing page objects, custom commands, and fixtures, and new commands were added to the `Chainable` interface.
+- [ ] Selectors, waits, and data setup follow step 4; the spec passes run alone and run twice in a row.
 - [ ] `nx run <app>-e2e:e2e --spec=<new spec> --skip-nx-cache` is green, and so is the project's full `nx run <app>-e2e:e2e`.
 - [ ] `nx show projects --affected --withTarget e2e` lists the e2e project for this change.
 - [ ] `nx affected -t lint` passes, including the e2e project.
