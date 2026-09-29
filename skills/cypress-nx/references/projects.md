@@ -21,23 +21,9 @@ find . -name 'cypress.config.*' -not -path '*/node_modules/*'
 
 If a project has no `e2e` target but has a `cypress.config.ts`, the plugin's `targetName` has been renamed. Check the `@nx/cypress/plugin` entry in `nx.json`.
 
-## Generated layout
+## Layout
 
-```
-apps/shop-e2e/
-  cypress.config.ts       # base URL, web server commands, spec pattern via nxE2EPreset
-  eslint.config.mjs       # extends root config, adds eslint-plugin-cypress
-  project.json            # name, tags, implicitDependencies; targets are inferred
-  tsconfig.json           # types: ["cypress", "node"], include globs
-  src/
-    e2e/app.cy.ts         # specs
-    fixtures/example.json # fixture data
-    support/app.po.ts     # page objects (function per query)
-    support/commands.ts   # custom commands + Cypress.Chainable declarations
-    support/e2e.ts        # loaded before every spec; imports ./commands
-```
-
-Older workspaces may have `src/integration/*.spec.ts` (Cypress ≤ 9) or a `cypress/` directory instead of `src/` when `cypressDir` is set to `cypress`. Put new specs wherever the existing ones are.
+The default is `src/e2e/*.cy.ts` for specs, with `src/support/` and `src/fixtures/` alongside. Older workspaces may have `src/integration/*.spec.ts` (Cypress ≤ 9) or a `cypress/` directory instead of `src/` when `cypressDir` is set to `cypress`. Put new specs wherever the existing ones are.
 
 ## `cypress.config.ts` anatomy
 
@@ -94,25 +80,7 @@ Running two e2e projects at once needs distinct ports. `nx g @nx/cypress:configu
 
 ## Inferred targets versus executor targets
 
-Modern workspaces register the plugin in `nx.json`:
-
-```json
-{
-  "plugins": [
-    {
-      "plugin": "@nx/cypress/plugin",
-      "options": {
-        "targetName": "e2e",
-        "openTargetName": "open-cypress",
-        "componentTestingTargetName": "component-test",
-        "ciTargetName": "e2e-ci"
-      }
-    }
-  ]
-}
-```
-
-`project.json` then has an empty `targets` block and the plugin infers these from `cypress.config.ts`:
+Modern workspaces register `@nx/cypress/plugin` in `nx.json`, whose options name the targets: `targetName` (`e2e`), `openTargetName` (`open-cypress`), `componentTestingTargetName` (`component-test`), and `ciTargetName` (`e2e-ci`). `project.json` then has an empty `targets` block and the plugin infers these from `cypress.config.ts`:
 
 | Target | What it runs | `dependsOn` |
 | --- | --- | --- |
@@ -145,28 +113,9 @@ Either way `--spec` works, so `nx run shop-e2e:e2e --spec=src/e2e/orders.cy.ts` 
 
 ## The affected graph edge
 
-The e2e project has no source-level import of the app, so Nx cannot infer the dependency. It comes from `project.json`:
+The e2e project has no source-level import of the app, so Nx cannot infer the dependency. It comes from one line in the e2e project's `project.json`: `"implicitDependencies": ["shop"]`.
 
-```json
-{
-  "name": "shop-e2e",
-  "projectType": "application",
-  "sourceRoot": "apps/shop-e2e/src",
-  "tags": [],
-  "implicitDependencies": ["shop"],
-  "targets": {}
-}
-```
-
-This single line is load-bearing. With it, editing `apps/shop/src/app/app.ts` marks both `shop` and `shop-e2e` affected. Without it, only `shop` is affected and `nx affected -t e2e` runs nothing — CI stays green while the flow is broken.
-
-Verify after any change to an e2e project, and whenever you create one:
-
-```bash
-git add -A
-nx show projects --affected --withTarget e2e --base=origin/main
-nx show project shop-e2e --json     # confirm implicitDependencies
-```
+That line is load-bearing. With it, editing `apps/shop/src/app/app.ts` marks both `shop` and `shop-e2e` affected. Without it, only `shop` is affected and `nx affected -t e2e` runs nothing — CI stays green while the flow is broken. Run the `affected` check from SKILL.md step 5 after any change to an e2e project, and whenever you create one.
 
 Other ways the edge goes missing:
 

@@ -19,22 +19,7 @@ A flaky spec is a spec that lies. Once a team sees a red e2e job that passes on 
 
 ## Timing
 
-The only correct waits are on the network and on the DOM. Cypress retries assertions for `defaultCommandTimeout`, so an assertion is a wait.
-
-```ts
-// wrong: guesses, and guesses differently on every machine
-cy.visit('/orders');
-cy.wait(1000);
-cy.get('[data-cy=order-row]').should('have.length', 3);
-
-// right: waits for the exact thing that has to happen
-cy.intercept('GET', '**/api/orders*').as('getOrders');
-cy.visit('/orders');
-cy.wait('@getOrders');
-cy.get('[data-cy=order-row]').should('have.length', 3);
-```
-
-Raise the timeout on a single slow step rather than globally:
+Gate on intercept aliases and retried assertions as in SKILL.md step 4. Raise the timeout on a single slow step rather than globally:
 
 ```ts
 cy.get('[data-cy=report-status]', { timeout: 30_000 }).should('contain', 'Ready');
@@ -76,9 +61,8 @@ Do not reach for `{ force: true }`. It skips the actionability checks that would
 
 ## Angular change detection, NgRx, and signals
 
-Cypress has no hook into Angular's change detection, and it does not need one: by the time the DOM has changed, the assertion retries will see it. Problems come from asserting on the wrong thing.
+Cypress has no hook into Angular's change detection, and it does not need one: by the time the DOM has changed, the assertion retries will see it. Problems come from asserting on the wrong thing — store state instead of the DOM (see SKILL.md step 4), or a moment that has already passed.
 
-- Assert on rendered output, not on store state. Anything reached through `cy.window()` and a store reference is a unit test in disguise, and it passes even when the template is broken.
 - After dispatching through the UI, wait on the effect's HTTP call, then on the DOM it produces.
 - A spinner that appears and disappears faster than the test can see it is not worth asserting on; assert the final state instead. If the loading state matters, test it in a component test where you control the observable.
 - `router.navigate` inside an effect resolves asynchronously. Assert with `cy.location('pathname').should(...)`, which retries, rather than reading the URL once.
@@ -89,28 +73,11 @@ Cypress 12+ resets cookies, local storage, and the page between tests by default
 
 Under the Nx atomizer each spec file runs as its own task, possibly on a different machine, so cross-spec state is guaranteed not to survive. Every spec must set up everything it needs.
 
-`cy.session` is the right way to avoid re-logging in: it caches and restores the session rather than skipping isolation.
-
-```ts
-const loginAs = (user: string) =>
-  cy.session(user, () => cy.request('POST', '/api/test/login', { user }), {
-    validate() {
-      cy.request('/api/me').its('status').should('eq', 200);
-    },
-  });
-```
-
-Without `validate`, an expired cached session gets restored and the next test fails on a login screen. Write `validate` as a block body: an arrow that implicitly returns the chainable is a type error, since Cypress types the option as returning `void | Promise<false | void>`.
+To avoid logging in per test, use `cy.session` with a `validate` block as in SKILL.md step 4: it caches and restores the session rather than skipping isolation.
 
 ## Retries
 
-`retries` in `cypress.config.ts` is a containment measure, not a fix:
-
-```ts
-retries: { runMode: 2, openMode: 0 }
-```
-
-It is defensible for genuine infrastructure noise. It is not defensible as a response to a spec you just wrote failing intermittently — a spec that needs a retry to pass will eventually need three. If a spec is retried in CI, treat it as a bug to fix, not a cost of doing business.
+`retries` in `cypress.config.ts` (for example `{ runMode: 2, openMode: 0 }`) is defensible for genuine infrastructure noise, never as a response to a spec you just wrote failing intermittently. A spec that needs one retry will eventually need three.
 
 ## Debugging a failure
 

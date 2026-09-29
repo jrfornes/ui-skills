@@ -12,20 +12,7 @@ E2E tests are the most expensive and least precise tests in the workspace. They 
 
 The scoping column is the one people forget. A component test on `libs/orders/ui` runs when that lib changes. An e2e spec runs whenever anything the app depends on changes — so a badly placed e2e adds its cost to unrelated pull requests forever.
 
-## Decision table
-
-| Question | Answer | Level |
-| --- | --- | --- |
-| Is it a pure function, pipe, validator, reducer, or selector? | yes | unit |
-| Is it "given these inputs, the template renders X" or "clicking this emits Y"? | yes | component |
-| Is it store wiring, an effect, a guard, a resolver, or an interceptor? | yes | unit, with HTTP mocked |
-| Does it need more than one route, or navigation between pages? | yes | e2e |
-| Does it need a real session, redirect, or deep link? | yes | e2e |
-| Does it need a real browser capability — upload, download, clipboard, another origin? | yes | e2e |
-| Does it need the real backend contract, not a mock of it? | yes | e2e (or an API contract test) |
-| Is it another variation of a path already covered by an e2e? | yes | push the variation down to component or unit |
-
-When two answers conflict, take the lowest level that can still fail for the right reason.
+Beyond the table in SKILL.md, two cases are e2e: the app actually boots (providers resolve, the router configuration is valid, lazy chunks load), and the frontend and backend agree on a contract when run against a real API (or cover that with an API contract test).
 
 ## Moving an assertion down a level
 
@@ -91,15 +78,3 @@ describe(OrderCard.name, () => {
 `createOutputSpy` returns an `EventEmitter` with a spied `emit`, aliased under the name you pass. It works for both `@Output()` emitters and signal-based `output()`. `cy.mount(Component, { autoSpyOutputs: true })` spies on every output at once, aliased as `<outputName>Spy`.
 
 If the workspace has no component-testing configuration and does not want one, use Angular's `TestBed` through the existing `nx test <lib>` setup instead. Do not introduce a third testing stack to avoid writing one e2e.
-
-## What only e2e can do
-
-Keep e2e for the things no lower level reproduces:
-
-- The app actually boots — providers resolve, the router configuration is valid, lazy chunks load.
-- Routing across features, including guards, redirects, and deep links into a lazy route.
-- Real authentication and session restore across a reload.
-- The frontend and backend agreeing on a contract, where the test runs against a real API.
-- Browser-level behaviour: file upload and download, multi-origin flows, print, clipboard.
-
-A workspace with a handful of these, all green and all fast, is worth more than a hundred e2e specs that nobody trusts.
