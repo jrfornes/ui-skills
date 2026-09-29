@@ -125,8 +125,7 @@ Export only the composed selectors from the library's `index.ts`. `ids` and `ent
 Store the id, derive the entity. Never store the selected entity object — it goes stale the moment the collection updates.
 
 ```ts
-// With @ngrx/router-store. The router selectors are created, not imported:
-// `@ngrx/router-store` exports `getRouterSelectors`, not `selectRouteParams` itself.
+// With @ngrx/router-store.
 export const { selectRouteParams } = getRouterSelectors();
 
 export const selectOrderIdFromRoute = createSelector(
@@ -170,7 +169,7 @@ Then `selectIsPending` becomes a selector over `pendingIds`, and a list row asks
 
 ### Server-side pagination
 
-`selectTotal` counts the entities you are holding, which for a paginated collection is one page. The real total comes from the response, so store it — it is an input, not derived state — and keep it separate from the adapter's own count:
+`selectTotal` counts the entities you are holding, which for a paginated collection is one page. Store the response's total separately from the adapter's own count:
 
 ```ts
 export interface OrdersState extends EntityState<Order> {

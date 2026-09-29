@@ -9,17 +9,6 @@ NgRx changes fail by being incomplete, not by being wrong: an action nobody redu
 
 So treat a store change as a single unit of work that ends at the feature's public surface. Work the steps in order.
 
-```
-- [ ] 1. Read the workspace's existing state conventions
-- [ ] 2. Classify each trigger, then write down the actions it implies
-- [ ] 3. Actions: one group per source, request / success / failure
-- [ ] 4. Effects: one job each, an explicit cancel strategy, an error path that survives
-- [ ] 5. Reducer: pure, immutable, one status field instead of boolean soup
-- [ ] 6. Selectors: every value a component reads has a named selector
-- [ ] 7. Facade: only if the workspace already uses them
-- [ ] 8. Tests at the seams, then check the public surface
-```
-
 ## 1. Read the workspace's existing state conventions
 
 NgRx has several generations of API and most codebases mix them. Match what is already there; do not introduce a second style in one feature.
@@ -170,25 +159,11 @@ Pick the flattening operator deliberately; the default choice is the bug.
 | Operator | Use for | What it does to an in-flight request |
 | --- | --- | --- |
 | `switchMap` | Reads where only the latest matters: search, typeahead, route param change, refresh | Cancels it. Never use for writes — the cancelled POST may still have hit the server |
-| `exhaustMap` | Submits that must not double-fire: save, login, "load more" | Ignores the new trigger until the current one finishes |
-| `concatMap` | Writes whose order matters against each other | Queues, runs one at a time |
+| `exhaustMap` | Submits that must not double-fire: save, login, "load more" | Ignores the new trigger until the current one finishes. `mergeMap` here appends the same page twice on impatient clicks |
+| `concatMap` | Writes whose order matters against each other | Queues, runs one at a time. On a typeahead every keystroke's request runs and the last one wins by accident |
 | `mergeMap` | Independent per-id work, e.g. deleting several rows | Runs in parallel, completion order not guaranteed |
 
-**`catchError` goes inside the inner observable**, as in the example above. On the outer stream it never produces the failure action the reducer is waiting for, so the slice sits in `pending` forever behind a spinner that never resolves. What it does *not* do is silently kill the effect: `@ngrx/effects` reports the error through Angular's `ErrorHandler` and resubscribes up to ten times, which is exactly why the bug survives review — the next trigger appears to work, having discarded whatever the stream had accumulated. [references/anti-patterns.md](references/anti-patterns.md) has the wrong/right pair and the test that catches it.
-
-If `@ngrx/operators` is installed, `mapResponse` makes the mistake harder to write, because there is no outer stream to put the handler on:
-
-```ts
-switchMap(() =>
-  api.getOrders().pipe(
-    mapResponse({
-      next: (orders) => OrdersApiActions.ordersLoadedSuccess({ orders }),
-      error: (error: unknown) =>
-        OrdersApiActions.ordersLoadedFailure({ message: toMessage(error) }),
-    }),
-  ),
-);
-```
+**`catchError` goes inside the inner observable**, as in the example above. On the outer stream it never produces the failure action the reducer is waiting for, so the slice sits in `pending` forever. The bug survives review because the framework resubscribes the effect and the next trigger appears to work; [references/anti-patterns.md](references/anti-patterns.md) explains what that costs. If `@ngrx/operators` is installed, `mapResponse({ next, error })` in place of `map` plus `catchError` makes the mistake harder to write, because there is no outer stream to put the handler on.
 
 Also:
 
@@ -197,8 +172,7 @@ Also:
 - Never dispatch an action the same effect listens to — that is an infinite loop.
 - Side-effect-only effects (navigate, toast, analytics, `localStorage`) use `{ dispatch: false }`. Leaving `dispatch` on with a `tap` re-dispatches the source action forever.
 - Return the observable. Never `.subscribe()` inside an effect, and never nest subscribes.
-- Register the effect where its state is registered, at the route for a lazy feature. `provideEffects` takes effect classes or a **record** of functional effects, so functional effects go in as a namespace object: `import * as ordersEffects from './orders.effects'`, then `provideEffects(ordersEffects)`. Passing one functional effect directly does not work. Step 6 wraps both calls in a single exported `provide*` function.
-- Under module federation, register a slice inside the remote that owns it and share `@ngrx/store` as a singleton: unshared, host and remote get separate `Store` instances and dispatches never cross; shared, two remotes claiming one feature key overwrite each other.
+- Register the effect where its state is registered, at the route for a lazy feature. `provideEffects` takes effect classes or a **record** of functional effects, so functional effects go in as a namespace object: `import * as ordersEffects from './orders.effects'`, then `provideEffects(ordersEffects)`. Passing one functional effect directly does not work. Step 6 wraps both calls in a single exported `provide*` function. Under module federation, see [references/anti-patterns.md](references/anti-patterns.md) for where to register.
 
 ## 5. Reducer: pure, immutable, one status field instead of boolean soup
 
@@ -327,15 +301,10 @@ How much that lint run proves depends on whether `@ngrx/eslint-plugin` is config
 
 ## Definition of done
 
-- [ ] Every trigger was classified as UI event, API result, or cross-feature, and its actions are named after events, grouped by source, with no action shared between sources.
-- [ ] Every new action has the effect and reducer case its row in step 2 requires; every reducer case has a selector that exposes what it changed.
-- [ ] Every request action has success and failure counterparts, and failure payloads are serializable.
-- [ ] Each effect does one job, its flattening operator was chosen for its cancellation behaviour, and `catchError` (or `mapResponse`) sits inside the inner observable.
+- [ ] Every new action has the effect, reducer case, and selector its row in step 2 requires, and every request action has a serializable failure counterpart.
+- [ ] Each effect's flattening operator was chosen for its cancellation behaviour, and `catchError` (or `mapResponse`) sits inside the inner observable.
 - [ ] Every operator used is importable in this workspace: nothing from `@ngrx/operators` unless it is a dependency.
-- [ ] No effect chains only to trigger another effect; no effect dispatches an action it listens for; side-effect-only effects are `{ dispatch: false }`.
-- [ ] The reducer is pure and deterministic, updates immutably, and stores only inputs — either values the user or the server supplied, not values a selector could compute.
+- [ ] The diff was read against steps 3–7 and [references/anti-patterns.md](references/anti-patterns.md).
 - [ ] Something resets the slice when it should be empty, or the decision not to reset it was deliberate.
-- [ ] Components read state only through named selectors, and derived values are computed in selectors rather than in components or templates.
-- [ ] A facade was added only because the workspace uses facades, and it exposes no `Store`, `dispatch`, actions, or selectors.
 - [ ] Existing consumers of any action, selector, or feature key you changed were found and updated.
 - [ ] Reducer, selector, and effect tests exist, including the failure path, written in the runner that project already uses, and `nx affected -t lint test` passes.

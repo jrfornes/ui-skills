@@ -4,12 +4,7 @@ Each layer has a seam that needs no rendered component. Use it.
 
 Find the runner before writing a spec, and match it. In an Nx workspace the runner is per project, not a root `package.json` script: check the project's `test` target and look at a neighbouring spec. Recent Nx generators default Angular libraries to Vitest, while older projects in the same repo are usually on Jest, so one workspace can legitimately have both. Examples below use `jest.fn()`; `vi.fn()` is a drop-in, and on Jasmine the equivalents are `jasmine.createSpyObj` and `spy.and.returnValue`.
 
-Cover, for every store change:
-
-1. Reducer: request, success, and failure cases.
-2. Selectors: each derived selector's projector.
-3. Effect: success, failure, and the cancellation its operator promises.
-4. Component or facade: that it reads through selectors and dispatches the right action.
+What to cover per layer is in the SKILL.md step 8 table. Covering only the success path is the most common gap: the failure path is usually the half missing from the implementation too.
 
 ## Reducers
 
@@ -290,7 +285,7 @@ TestBed.inject(HttpTestingController)
   .expectOne('/api/orders')
   .flush([orderA]);
 
-expect(await firstValueFrom(store.select(ordersFeature.selectAllOrders))).toEqual([orderA]);
+expect(await firstValueFrom(store.select(ordersFeature.selectOrders))).toEqual([orderA]);
 ```
 
 Keep a small number of these — one per feature covering the happy path and one failure — and let the per-layer tests carry the edge cases.
